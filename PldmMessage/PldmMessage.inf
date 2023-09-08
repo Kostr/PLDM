@@ -1,0 +1,27 @@
+##
+# Copyright (c) 2023, Konstantin Aladyshev <aladyshev22@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+##
+
+[Defines]
+  INF_VERSION                    = 1.25
+  BASE_NAME                      = PldmMessage
+  FILE_GUID                      = 2e55fa38-f148-42d3-af90-1be247323e55
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = UefiMain
+
+[Sources]
+  PldmMessage.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  ManageabilityPkg/ManageabilityPkg.dec
+
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  UefiLib
+
+[Protocols]
+  gEdkiiMctpProtocolGuid
