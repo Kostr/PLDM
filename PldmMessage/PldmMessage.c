@@ -58,7 +58,7 @@ UefiMain (
   Status = MctpProtocol->Functions.Version1_0->MctpSubmitCommand(
     MctpProtocol,
     MCTP_MESSAGE_TYPE_PLDM,
-    7,
+    9,
     8,
     FALSE,
     (UINT8*)&PldmHeader,

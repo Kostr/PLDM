@@ -34,12 +34,12 @@ For the successfull compilation we would also need to add a `ManageabilityTransp
 And configure some PCDs:
 ```
 [PcdsFixedAtBuild]
-  gManageabilityPkgTokenSpaceGuid.PcdMctpSourceEndpointId|7
+  gManageabilityPkgTokenSpaceGuid.PcdMctpSourceEndpointId|9
   gManageabilityPkgTokenSpaceGuid.PcdMctpDestinationEndpointId|8
   gManageabilityPkgTokenSpaceGuid.PcdMctpKcsBaseAddress|0xca8
 ```
 Couple of words about PCDs:
-- The `PcdMctpSourceEndpointId` can be arbitrary,
+- The `PcdMctpSourceEndpointId` can be arbitrary (keep in mind that numbers 0-7 are reserved per specification),
 - The `PcdMctpDestinationEndpointId` is mapped to the default `libmctp` EID (https://github.com/openbmc/libmctp/blob/2a2a0f6fd83318cfc37f44a657c9490c6a58a03a/utils/mctp-demux-daemon.c#L43),
 - The `PcdMctpKcsBaseAddress` should be chosen based on your hardware settings and synced with the BMC settings. In this case I use `0xca8`, later this value would be seen in the BMC configuration.
 
