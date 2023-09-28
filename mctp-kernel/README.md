@@ -11,7 +11,13 @@ Since currently there is no MCTP-over-KCS binding driver we need to add some pat
 - [0002-ipmi-Create-header-with-KCS-interface-defines.patch](0002-ipmi-Create-header-with-KCS-interface-defines.patch)
 - [0003-mctp-Add-MCTP-over-KCS-transport-binding.patch](0003-mctp-Add-MCTP-over-KCS-transport-binding.patch)
 
-Add these patches to your OpenBMC distibution via a standard recipe override mechanics.
+You also need to apply this patch to the [libpldm](https://github.com/openbmc/libpldm) library:
+- [`66591: transport: af-mctp: Add pldm_transport_af_mctp_bind()`](https://gerrit.openbmc.org/c/openbmc/libpldm/+/66591)
+
+And this patch to the [pldm](https://github.com/openbmc/pldm) package:
+- [`63652: pldm: Convert to using libpldm transport APIs`](https://gerrit.openbmc.org/c/openbmc/pldm/+/63652)
+
+Add all of these patches to your OpenBMC distibution via a standard recipe override mechanics.
 
 ## Kconfig
 
