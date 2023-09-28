@@ -1,10 +1,10 @@
 # Description
 
-This repository contains a solution for the PLDM communication between the HOST (UEFI firmware) and BMC, with both implemented via open-source components:
+This repository contains a solution for the [PLDM](https://www.dmtf.org/sites/default/files/standards/documents/DSP0240_1.1.0.pdf) communication between the HOST (UEFI firmware) and BMC, with both implemented via open-source components:
 - The HOST (UEFI firmware) part is based one the [`edk2`](https://github.com/tianocore/edk2) and [`edk2-platforms`](https://github.com/tianocore/edk2-platforms) code,
 - The BMC part is based on the [openbmc](https://github.com/openbmc/openbmc) distribution.
 
-The PLDM communication is provided via MCTP over KCS transport.
+The PLDM communication is provided via [MCTP over KCS transport](https://www.dmtf.org/sites/default/files/standards/documents/DSP0254_1.0.0.pdf).
 
 # HOST (UEFI firmware) configuration
 
