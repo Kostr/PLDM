@@ -3,6 +3,15 @@
 Kernel-based MCTP stack is based on the kernel net mctp driver ([info](https://codeconstruct.com.au/docs/mctp-on-linux-introduction/), [current bindings](https://github.com/openbmc/linux/tree/dev-6.1/drivers/net/mctp))
 .
 
+## Configuration
+
+For the kernel-based MCTP stack it is necessary to enable `mctp` disto feature.
+
+Add the following string to your machine configuration file:
+```
+DISTRO_FEATURES += "mctp"
+```
+
 ## Patches
 
 Since currently there is no MCTP-over-KCS binding driver we need to add some patches to the kernel:
