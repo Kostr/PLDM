@@ -45,7 +45,9 @@ Couple of words about PCDs:
 
 
 Also the current code is not fully complaint with the [Management Component Transport Protocol (MCTP) KCS Transport Binding Specification](https://www.dmtf.org/sites/default/files/standards/documents/DSP0254_1.0.0.pdf).
-As a temprarily workaround we would be using the following [fork](https://github.com/Kostr/edk2-platforms).
+As a temprarily workaround we would be using the following forks:
+- [edk2-platforms](https://github.com/Kostr/edk2-platforms/tree/MCTP_OVER_KCS_UPDATE)
+- [edk2](https://github.com/Kostr/edk2/tree/MCTP_OVER_KCS_UPDATE)
 
 # BMC configuration
 
