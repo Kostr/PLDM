@@ -1,7 +1,7 @@
-From c46efdd9d2f2b8540db8c3dded1cfea39d3cf18d Mon Sep 17 00:00:00 2001
+From 31766efb95c4a3d45cba87539965968a99ef7ddc Mon Sep 17 00:00:00 2001
 From: Konstantin Aladyshev <aladyshev22@gmail.com>
 Date: Wed, 27 Sep 2023 18:47:19 +0300
-Subject: [PATCH 3/3] mctp: Add MCTP-over-KCS transport binding
+Subject: [PATCH v4 3/3] mctp: Add MCTP-over-KCS transport binding
 
 This change adds a MCTP KCS transport binding, as defined by the DMTF
 specificiation DSP0254 - "MCTP KCS Transport Binding".
@@ -14,8 +14,8 @@ Signed-off-by: Konstantin Aladyshev <aladyshev22@gmail.com>
 ---
  drivers/net/mctp/Kconfig    |   8 +
  drivers/net/mctp/Makefile   |   1 +
- drivers/net/mctp/mctp-kcs.c | 624 ++++++++++++++++++++++++++++++++++++
- 3 files changed, 633 insertions(+)
+ drivers/net/mctp/mctp-kcs.c | 594 ++++++++++++++++++++++++++++++++++++
+ 3 files changed, 603 insertions(+)
  create mode 100644 drivers/net/mctp/mctp-kcs.c
 
 diff --git a/drivers/net/mctp/Kconfig b/drivers/net/mctp/Kconfig
@@ -47,10 +47,10 @@ index 1ca3e6028f77..885339a40f22 100644
 +obj-$(CONFIG_MCTP_TRANSPORT_KCS) += mctp-kcs.o
 diff --git a/drivers/net/mctp/mctp-kcs.c b/drivers/net/mctp/mctp-kcs.c
 new file mode 100644
-index 000000000000..8d8b77ad709c
+index 000000000000..2ea2ab00c188
 --- /dev/null
 +++ b/drivers/net/mctp/mctp-kcs.c
-@@ -0,0 +1,624 @@
+@@ -0,0 +1,594 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Management Component Transport Protocol (MCTP) KCS transport binding.
@@ -66,6 +66,7 @@ index 000000000000..8d8b77ad709c
 + * Copyright (c) 2023 Konstantin Aladyshev <aladyshev22@gmail.com>
 + */
 +
++#include <linux/i2c.h>
 +#include <linux/if_arp.h>
 +#include <linux/ipmi_kcs.h>
 +#include <linux/kcs_bmc_client.h>
@@ -112,39 +113,8 @@ index 000000000000..8d8b77ad709c
 +	u8 pec;
 +} __packed;
 +
-+// According to SMBUS spec, the polynomial is:
-+// // C(x) = X^8 + X^2 + X^1 + 1, which is 0x107,
-+// // just ignore bit8 in definition.
-+#define MCTP_KCS_PACKET_ERROR_CODE_POLY 0x07
-+//
 +#define MCTP_KCS_NETFN_LUN 0xb0
 +#define DEFINING_BODY_DMTF_PRE_OS_WORKING_GROUP 0x01
-+
-+static u8 generate_crc8(u8 polynomial, u8 crc_init_val, u8 *buffer, u32 len)
-+{
-+	u8 bit_index;
-+	u32 buffer_index;
-+	u8 crc = crc_init_val;
-+
-+	buffer_index = 0;
-+	while (buffer_index < len) {
-+		crc = crc ^ *(buffer + buffer_index);
-+		buffer_index++;
-+
-+		for (bit_index = 0; bit_index < 8; bit_index++) {
-+			if ((crc & 0x80) != 0)
-+				crc = (crc << 1) ^ polynomial;
-+			else
-+				crc <<= 1;
-+		}
-+	}
-+	return crc;
-+}
-+
-+static u8 generate_pec(u8 *buffer, u32 len)
-+{
-+	return generate_crc8(MCTP_KCS_PACKET_ERROR_CODE_POLY, 0, buffer, len);
-+}
 +
 +static int mctp_kcs_validate_data(struct mctp_kcs *mkcs,
 +				  struct mctp_kcs_header *hdr, int len)
@@ -168,18 +138,18 @@ index 000000000000..8d8b77ad709c
 +		ndev->stats.rx_dropped++;
 +		return -EINVAL;
 +	}
-+	if (hdr->len != (len - sizeof(struct mctp_kcs_header) -
-+			 sizeof(struct mctp_kcs_trailer))) {
++	if (hdr->len != (u8)(len - sizeof(struct mctp_kcs_header) -
++			     sizeof(struct mctp_kcs_trailer))) {
 +		dev_err(mkcs->client.dev->dev,
 +			"%s: KCS binding header error! len = 0x%02x, but should be 0x%02x",
 +			__func__, hdr->len,
-+			(len - sizeof(struct mctp_kcs_header) -
-+			 sizeof(struct mctp_kcs_trailer)));
++			(u8)(len - sizeof(struct mctp_kcs_header) -
++			     sizeof(struct mctp_kcs_trailer)));
 +		ndev->stats.rx_length_errors++;
 +		return -EINVAL;
 +	}
 +
-+	pec = generate_pec((u8 *)(hdr + 1), hdr->len);
++	pec = i2c_smbus_pec(0, (u8 *)(hdr + 1), hdr->len);
 +	tlr = (struct mctp_kcs_trailer *)((u8 *)(hdr + 1) + hdr->len);
 +	if (pec != tlr->pec) {
 +		dev_err(mkcs->client.dev->dev,
@@ -215,8 +185,7 @@ index 000000000000..8d8b77ad709c
 +			"%s: error! Wrong KCS stage at the end of data read (phase=%d)",
 +			__func__, mkcs->phase);
 +		mkcs->netdev->stats.rx_dropped++;
-+		spin_unlock_irqrestore(&mkcs->lock, flags);
-+		return;
++		goto unlock_irq;
 +	}
 +
 +	mkcs->phase = KCS_PHASE_WAIT_READ;
@@ -226,8 +195,7 @@ index 000000000000..8d8b77ad709c
 +	skb = netdev_alloc_skb(mkcs->netdev, data_len);
 +	if (!skb) {
 +		mkcs->netdev->stats.rx_dropped++;
-+		spin_unlock_irqrestore(&mkcs->lock, flags);
-+		return;
++		goto unlock_irq;
 +	}
 +
 +	kcs_header = (struct mctp_kcs_header *)mkcs->data_in;
@@ -236,14 +204,12 @@ index 000000000000..8d8b77ad709c
 +		dev_err(mkcs->client.dev->dev,
 +			"%s: error! Binding validation failed", __func__);
 +		dev_kfree_skb(skb);
-+		spin_unlock_irqrestore(&mkcs->lock, flags);
-+		return;
++		goto unlock_irq;
 +	}
 +
 +	skb->protocol = htons(ETH_P_MCTP);
 +	skb_put_data(skb, mkcs->data_in + sizeof(struct mctp_kcs_header),
 +		     data_len);
-+	spin_unlock_irqrestore(&mkcs->lock, flags);
 +	skb_reset_network_header(skb);
 +
 +	cb = __mctp_cb(skb);
@@ -252,6 +218,9 @@ index 000000000000..8d8b77ad709c
 +	netif_rx(skb);
 +	mkcs->netdev->stats.rx_packets++;
 +	mkcs->netdev->stats.rx_bytes += data_len;
++
++unlock_irq:
++	spin_unlock_irqrestore(&mkcs->lock, flags);
 +}
 +
 +static netdev_tx_t mctp_kcs_start_xmit(struct sk_buff *skb,
@@ -287,7 +256,7 @@ index 000000000000..8d8b77ad709c
 +	kcs_header->len = skb->len;
 +	skb_copy_bits(skb, 0, kcs_header + 1, skb->len);
 +	mkcs->data_out[sizeof(struct mctp_kcs_header) + skb->len] =
-+		generate_pec((u8 *)(kcs_header + 1), skb->len);
++		i2c_smbus_pec(0, (u8 *)(kcs_header + 1), skb->len);
 +	mkcs->data_out_idx = 1;
 +	mkcs->data_out_len = skb->len + sizeof(struct mctp_kcs_header) +
 +			     sizeof(struct mctp_kcs_trailer);
@@ -305,7 +274,7 @@ index 000000000000..8d8b77ad709c
 +	return NETDEV_TX_OK;
 +}
 +
-+static inline void set_state(struct mctp_kcs *mkcs, u8 state)
++static void set_state(struct mctp_kcs *mkcs, u8 state)
 +{
 +	dev_dbg(mkcs->client.dev->dev, "%s: state=0x%02x", __func__, state);
 +	kcs_bmc_update_status(mkcs->client.dev, KCS_STATUS_STATE_MASK,
@@ -376,25 +345,23 @@ index 000000000000..8d8b77ad709c
 +
 +static void kcs_bmc_ipmi_handle_data(struct mctp_kcs *mkcs)
 +{
-+	struct kcs_bmc_device *dev;
 +	u8 data;
-+
-+	dev = mkcs->client.dev;
++	struct kcs_bmc_device *kcs_bmc = mkcs->client.dev;
 +
 +	switch (mkcs->phase) {
 +	case KCS_PHASE_WRITE_START:
-+		dev_dbg(dev->dev, "%s: KCS_PHASE_WRITE_START", __func__);
++		dev_dbg(kcs_bmc->dev, "%s: KCS_PHASE_WRITE_START", __func__);
 +		mkcs->phase = KCS_PHASE_WRITE_DATA;
 +		fallthrough;
 +
 +	case KCS_PHASE_WRITE_DATA:
-+		dev_dbg(dev->dev, "%s: KCS_PHASE_WRITE_DATA", __func__);
++		dev_dbg(kcs_bmc->dev, "%s: KCS_PHASE_WRITE_DATA", __func__);
 +		if (mkcs->data_in_idx < KCS_MSG_BUFSIZ) {
 +			set_state(mkcs, WRITE_STATE);
-+			kcs_bmc_write_data(dev, KCS_ZERO_DATA);
++			kcs_bmc_write_data(kcs_bmc, KCS_ZERO_DATA);
 +			mkcs->data_in[mkcs->data_in_idx++] =
-+				kcs_bmc_read_data(dev);
-+			dev_dbg(dev->dev,
++				kcs_bmc_read_data(kcs_bmc);
++			dev_dbg(kcs_bmc->dev,
 +				"%s: KCS_PHASE_WRITE_DATA: data_in[%d]=0x%02x",
 +				__func__, mkcs->data_in_idx - 1,
 +				mkcs->data_in[mkcs->data_in_idx - 1]);
@@ -405,12 +372,12 @@ index 000000000000..8d8b77ad709c
 +		break;
 +
 +	case KCS_PHASE_WRITE_END_CMD:
-+		dev_dbg(dev->dev, "%s: KCS_PHASE_WRITE_END_CMD", __func__);
++		dev_dbg(kcs_bmc->dev, "%s: KCS_PHASE_WRITE_END_CMD", __func__);
 +		if (mkcs->data_in_idx < KCS_MSG_BUFSIZ) {
 +			set_state(mkcs, READ_STATE);
 +			mkcs->data_in[mkcs->data_in_idx++] =
-+				kcs_bmc_read_data(dev);
-+			dev_dbg(dev->dev,
++				kcs_bmc_read_data(kcs_bmc);
++			dev_dbg(kcs_bmc->dev,
 +				"%s: KCS_PHASE_WRITE_END_CMD: data_in[%d]=0x%02x",
 +				__func__, mkcs->data_in_idx - 1,
 +				mkcs->data_in[mkcs->data_in_idx - 1]);
@@ -423,24 +390,24 @@ index 000000000000..8d8b77ad709c
 +		break;
 +
 +	case KCS_PHASE_READ:
-+		dev_dbg(dev->dev,
++		dev_dbg(kcs_bmc->dev,
 +			"%s: KCS_PHASE_READ, data_out_idx=%d, data_out_len=%d",
 +			__func__, mkcs->data_out_idx, mkcs->data_out_len);
 +		if (mkcs->data_out_idx == mkcs->data_out_len)
 +			set_state(mkcs, IDLE_STATE);
 +
-+		data = kcs_bmc_read_data(dev);
++		data = kcs_bmc_read_data(kcs_bmc);
 +		if (data != KCS_CMD_READ_BYTE) {
-+			dev_dbg(dev->dev,
++			dev_dbg(kcs_bmc->dev,
 +				"%s: error! data is not equal to KCS_CMD_READ_BYTE",
 +				__func__);
 +			set_state(mkcs, ERROR_STATE);
-+			kcs_bmc_write_data(dev, KCS_ZERO_DATA);
++			kcs_bmc_write_data(kcs_bmc, KCS_ZERO_DATA);
 +			break;
 +		}
 +
 +		if (mkcs->data_out_idx == mkcs->data_out_len) {
-+			kcs_bmc_write_data(dev, KCS_ZERO_DATA);
++			kcs_bmc_write_data(kcs_bmc, KCS_ZERO_DATA);
 +			mkcs->netdev->stats.tx_bytes += mkcs->data_out_len;
 +			mkcs->netdev->stats.tx_packets++;
 +			mkcs->phase = KCS_PHASE_IDLE;
@@ -449,30 +416,31 @@ index 000000000000..8d8b77ad709c
 +			break;
 +		}
 +
-+		dev_dbg(dev->dev, "%s: KCS_PHASE_READ: data_out[%d]=0x%02x",
++		dev_dbg(kcs_bmc->dev, "%s: KCS_PHASE_READ: data_out[%d]=0x%02x",
 +			__func__, mkcs->data_out_idx,
 +			mkcs->data_out[mkcs->data_out_idx]);
-+		kcs_bmc_write_data(dev, mkcs->data_out[mkcs->data_out_idx++]);
++		kcs_bmc_write_data(kcs_bmc,
++				   mkcs->data_out[mkcs->data_out_idx++]);
 +		break;
 +
 +	case KCS_PHASE_ABORT_ERROR1:
-+		dev_dbg(dev->dev, "%s: KCS_PHASE_ABORT_ERROR1", __func__);
++		dev_dbg(kcs_bmc->dev, "%s: KCS_PHASE_ABORT_ERROR1", __func__);
 +		set_state(mkcs, READ_STATE);
-+		kcs_bmc_read_data(dev);
-+		kcs_bmc_write_data(dev, mkcs->error);
++		kcs_bmc_read_data(kcs_bmc);
++		kcs_bmc_write_data(kcs_bmc, mkcs->error);
 +		mkcs->phase = KCS_PHASE_ABORT_ERROR2;
 +		break;
 +
 +	case KCS_PHASE_ABORT_ERROR2:
-+		dev_dbg(dev->dev, "%s: KCS_PHASE_ABORT_ERROR2", __func__);
++		dev_dbg(kcs_bmc->dev, "%s: KCS_PHASE_ABORT_ERROR2", __func__);
 +		set_state(mkcs, IDLE_STATE);
-+		kcs_bmc_read_data(dev);
-+		kcs_bmc_write_data(dev, KCS_ZERO_DATA);
++		kcs_bmc_read_data(kcs_bmc);
++		kcs_bmc_write_data(kcs_bmc, KCS_ZERO_DATA);
 +		mkcs->phase = KCS_PHASE_IDLE;
 +		break;
 +
 +	default:
-+		dev_dbg(dev->dev, "%s: unknown KCS phase", __func__);
++		dev_dbg(kcs_bmc->dev, "%s: unknown KCS phase", __func__);
 +		kcs_bmc_ipmi_force_abort(mkcs);
 +		break;
 +	}
@@ -480,25 +448,21 @@ index 000000000000..8d8b77ad709c
 +
 +static void kcs_bmc_ipmi_handle_cmd(struct mctp_kcs *mkcs)
 +{
-+	struct kcs_bmc_device *dev;
-+	u8 cmd;
-+
-+	dev = mkcs->client.dev;
++	struct kcs_bmc_device *kcs_bmc = mkcs->client.dev;
 +
 +	set_state(mkcs, WRITE_STATE);
-+	kcs_bmc_write_data(mkcs->client.dev, KCS_ZERO_DATA);
++	kcs_bmc_write_data(kcs_bmc, KCS_ZERO_DATA);
 +
-+	cmd = kcs_bmc_read_data(mkcs->client.dev);
-+	switch (cmd) {
++	switch (kcs_bmc_read_data(kcs_bmc)) {
 +	case KCS_CMD_WRITE_START:
-+		dev_dbg(dev->dev, "%s: KCS_CMD_WRITE_START", __func__);
++		dev_dbg(kcs_bmc->dev, "%s: KCS_CMD_WRITE_START", __func__);
 +		mkcs->phase = KCS_PHASE_WRITE_START;
 +		mkcs->error = KCS_NO_ERROR;
 +		mkcs->data_in_idx = 0;
 +		break;
 +
 +	case KCS_CMD_WRITE_END:
-+		dev_dbg(dev->dev, "%s: KCS_CMD_WRITE_END", __func__);
++		dev_dbg(kcs_bmc->dev, "%s: KCS_CMD_WRITE_END", __func__);
 +		if (mkcs->phase != KCS_PHASE_WRITE_DATA) {
 +			kcs_bmc_ipmi_force_abort(mkcs);
 +			break;
@@ -507,7 +471,7 @@ index 000000000000..8d8b77ad709c
 +		break;
 +
 +	case KCS_CMD_GET_STATUS_ABORT:
-+		dev_dbg(dev->dev, "%s: KCS_CMD_GET_STATUS_ABORT", __func__);
++		dev_dbg(kcs_bmc->dev, "%s: KCS_CMD_GET_STATUS_ABORT", __func__);
 +		if (mkcs->error == KCS_NO_ERROR)
 +			mkcs->error = KCS_ABORTED_BY_COMMAND;
 +
@@ -516,14 +480,14 @@ index 000000000000..8d8b77ad709c
 +		break;
 +
 +	default:
-+		dev_dbg(dev->dev, "%s: unknown KCS command", __func__);
++		dev_dbg(kcs_bmc->dev, "%s: unknown KCS command", __func__);
 +		kcs_bmc_ipmi_force_abort(mkcs);
 +		mkcs->error = KCS_ILLEGAL_CONTROL_CODE;
 +		break;
 +	}
 +}
 +
-+static inline struct mctp_kcs *client_to_mctp_kcs(struct kcs_bmc_client *client)
++static struct mctp_kcs *client_to_mctp_kcs(struct kcs_bmc_client *client)
 +{
 +	return container_of(client, struct mctp_kcs, client);
 +}
@@ -579,11 +543,10 @@ index 000000000000..8d8b77ad709c
 +
 +	ndev = alloc_netdev(sizeof(*mkcs), name, NET_NAME_ENUM, mctp_kcs_setup);
 +	if (!ndev) {
-+		dev_err(kcs_bmc->dev,
-+			"alloc_netdev failed for KCS channel %d\n",
-+			kcs_bmc->channel);
-+		rc = -ENOMEM;
-+		goto err;
++		dev_err_probe(kcs_bmc->dev, -ENOMEM,
++			      "alloc_netdev failed for KCS channel %d\n",
++			      kcs_bmc->channel);
++		return -ENOMEM;
 +	}
 +
 +	mkcs = netdev_priv(ndev);
@@ -591,10 +554,19 @@ index 000000000000..8d8b77ad709c
 +	mkcs->client.dev = kcs_bmc;
 +	mkcs->client.ops = &kcs_bmc_mctp_client_ops;
 +	mkcs->data_in = devm_kmalloc(kcs_bmc->dev, KCS_MSG_BUFSIZ, GFP_KERNEL);
++	if (!mkcs->data_in) {
++		dev_err_probe(
++			kcs_bmc->dev, -ENOMEM,
++			"failed to allocate data_in buffer for KCS channel %d\n",
++			kcs_bmc->channel);
++		rc = -ENOMEM;
++		goto free_netdev;
++	}
 +	mkcs->data_out = devm_kmalloc(kcs_bmc->dev, KCS_MSG_BUFSIZ, GFP_KERNEL);
-+	if (!mkcs->data_in || !mkcs->data_out) {
-+		dev_err(kcs_bmc->dev,
-+			"failed to allocate data buffers for KCS channel %d\n",
++	if (!mkcs->data_out) {
++		dev_err_probe(
++			kcs_bmc->dev, -ENOMEM,
++			"failed to allocate data_out buffer for KCS channel %d\n",
 +			kcs_bmc->channel);
 +		rc = -ENOMEM;
 +		goto free_netdev;
@@ -615,10 +587,8 @@ index 000000000000..8d8b77ad709c
 +	return 0;
 +
 +free_netdev:
-+	if (ndev)
-+		free_netdev(ndev);
++	free_netdev(ndev);
 +
-+err:
 +	return rc;
 +}
 +
@@ -643,9 +613,9 @@ index 000000000000..8d8b77ad709c
 +
 +	unregister_netdev(mkcs->netdev);
 +	free_netdev(mkcs->netdev);
-+	kcs_bmc_disable_device(mkcs->client.dev, &mkcs->client);
-+	devm_kfree(kcs_bmc->dev, mkcs->data_in);
++	kcs_bmc_disable_device(kcs_bmc, &mkcs->client);
 +	devm_kfree(kcs_bmc->dev, mkcs->data_out);
++	devm_kfree(kcs_bmc->dev, mkcs->data_in);
 +	return 0;
 +}
 +
