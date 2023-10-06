@@ -90,18 +90,19 @@ Add the following package to your image:
 pldm
 ```
 
-## Building and flashing
+## Configuring `mctpkcs2` interface
 
-After all of the above steps are applied you need to build OpenBMC image and flash it to the target device.
-
-## Configuring mctpkcs2 interface
-
-Login to the running BMC and perform the following commands to setup address routing and enable the necessary network interface:
+Since mctp is a network device, before performing actual communication you have to open the interface and setup address and routing. Offcourse you can always do this manually by executing these commands on the running BMC system:
 ```
 $ mctp addr add 8 dev mctpkcs2
 $ mctp route add 9 via mctpkcs2
 $ ifconfig mctpkcs2 up
 ```
+But it would be better to write these commands in a systemd service that would be executed on every system start. You can find example of a recipe that adds such unit to the system in the [recipes-support](recipes-support) folder.
+
+## Building and flashing
+
+After all of the above steps are applied you need to build OpenBMC image and flash it to the target device.
 
 Now you are ready to test MCTP communication from the HOST via the [`PldmMessage` UEFI application](/#test-application).
 

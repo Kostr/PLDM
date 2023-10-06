@@ -1,0 +1,12 @@
+[Unit]
+Description=MCTP init service
+After=mctp-local.target
+
+[Service]
+Type=oneshot
+ExecStart=mctp addr add 8 dev mctpkcs2
+ExecStart=mctp route add 9 via mctpkcs2
+ExecStart=mctp link set mctpkcs2 up
+
+[Install]
+WantedBy = mctp-local.target
