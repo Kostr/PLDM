@@ -1,7 +1,7 @@
 From 26c355c8a53c1e669a322751b8806329975b1964 Mon Sep 17 00:00:00 2001
 From: Konstantin Aladyshev <aladyshev22@gmail.com>
 Date: Wed, 27 Sep 2023 18:03:09 +0300
-Subject: [PATCH v4 2/3] ipmi: Create header with KCS interface defines
+Subject: [PATCH v5 2/3] ipmi: Create header with KCS interface defines
 
 Some definitions from the current kcs_bmc_cdev_ipmi driver can be also
 utilized by the MTCP KCS binding driver. Move such definitions to the

@@ -1,10 +1,10 @@
-From 31766efb95c4a3d45cba87539965968a99ef7ddc Mon Sep 17 00:00:00 2001
+From cb8611ea54405f8b77339898c847201652e7598f Mon Sep 17 00:00:00 2001
 From: Konstantin Aladyshev <aladyshev22@gmail.com>
 Date: Wed, 27 Sep 2023 18:47:19 +0300
-Subject: [PATCH v4 3/3] mctp: Add MCTP-over-KCS transport binding
+Subject: [PATCH v5 3/3] mctp: Add MCTP-over-KCS transport binding
 
 This change adds a MCTP KCS transport binding, as defined by the DMTF
-specificiation DSP0254 - "MCTP KCS Transport Binding".
+specification DSP0254 - "MCTP KCS Transport Binding".
 A MCTP protocol network device is created for each KCS channel found in
 the system.
 The interrupt code for the KCS state machine is based on the current
@@ -14,8 +14,8 @@ Signed-off-by: Konstantin Aladyshev <aladyshev22@gmail.com>
 ---
  drivers/net/mctp/Kconfig    |   8 +
  drivers/net/mctp/Makefile   |   1 +
- drivers/net/mctp/mctp-kcs.c | 594 ++++++++++++++++++++++++++++++++++++
- 3 files changed, 603 insertions(+)
+ drivers/net/mctp/mctp-kcs.c | 600 ++++++++++++++++++++++++++++++++++++
+ 3 files changed, 609 insertions(+)
  create mode 100644 drivers/net/mctp/mctp-kcs.c
 
 diff --git a/drivers/net/mctp/Kconfig b/drivers/net/mctp/Kconfig
@@ -47,14 +47,14 @@ index 1ca3e6028f77..885339a40f22 100644
 +obj-$(CONFIG_MCTP_TRANSPORT_KCS) += mctp-kcs.o
 diff --git a/drivers/net/mctp/mctp-kcs.c b/drivers/net/mctp/mctp-kcs.c
 new file mode 100644
-index 000000000000..2ea2ab00c188
+index 000000000000..b0d903609c64
 --- /dev/null
 +++ b/drivers/net/mctp/mctp-kcs.c
-@@ -0,0 +1,594 @@
+@@ -0,0 +1,600 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Management Component Transport Protocol (MCTP) KCS transport binding.
-+ * This driver is an implementation of the DMTF specificiation
++ * This driver is an implementation of the DMTF specification
 + * "DSP0254 - Management Component Transport Protocol (MCTP) KCS Transport
 + * Binding", available at:
 + *
@@ -93,11 +93,11 @@ index 000000000000..2ea2ab00c188
 +	enum kcs_ipmi_phases phase;
 +	enum kcs_ipmi_errors error;
 +
-+	int data_in_idx;
++	unsigned int data_in_idx;
 +	u8 *data_in;
 +
-+	int data_out_idx;
-+	int data_out_len;
++	unsigned int data_out_idx;
++	unsigned int data_out_len;
 +	u8 *data_out;
 +
 +	struct work_struct rx_work;
@@ -116,13 +116,24 @@ index 000000000000..2ea2ab00c188
 +#define MCTP_KCS_NETFN_LUN 0xb0
 +#define DEFINING_BODY_DMTF_PRE_OS_WORKING_GROUP 0x01
 +
-+static int mctp_kcs_validate_data(struct mctp_kcs *mkcs,
-+				  struct mctp_kcs_header *hdr, int len)
++static int mctp_kcs_validate_data(struct mctp_kcs *mkcs, u8 *data,
++				  unsigned int len)
 +{
++	struct mctp_kcs_header *hdr = (struct mctp_kcs_header *)data;
 +	struct net_device *ndev = mkcs->netdev;
 +	struct mctp_kcs_trailer *tlr;
 +	u8 pec;
 +
++	if (len < (sizeof(struct mctp_kcs_header) +
++		   sizeof(struct mctp_kcs_trailer))) {
++		dev_err(mkcs->client.dev->dev,
++			"%s: error! Received data size (%d) is less than binding structs size (%d)",
++			__func__, len,
++			sizeof(struct mctp_kcs_header) +
++				sizeof(struct mctp_kcs_trailer));
++		ndev->stats.rx_length_errors++;
++		return -EINVAL;
++	}
 +	if (hdr->netfn_lun != MCTP_KCS_NETFN_LUN) {
 +		dev_err(mkcs->client.dev->dev,
 +			"%s: KCS binding header error! netfn_lun = 0x%02x, but should be 0x%02x",
@@ -165,21 +176,17 @@ index 000000000000..2ea2ab00c188
 +{
 +	struct mctp_kcs *mkcs = container_of(work, struct mctp_kcs, rx_work);
 +	struct mctp_skb_cb *cb;
++	unsigned int data_len;
 +	struct sk_buff *skb;
 +	unsigned long flags;
++	unsigned int i;
 +	int rc;
-+	int i;
-+	struct mctp_kcs_header *kcs_header;
-+	int data_len;
-+	int data_in_idx;
 +
 +	spin_lock_irqsave(&mkcs->lock, flags);
 +	for (i = 0; i < (mkcs->data_in_idx); i++)
 +		dev_dbg(mkcs->client.dev->dev, "%s: data_in[%d]=0x%02x",
 +			__func__, i, mkcs->data_in[i]);
 +
-+	data_len = mkcs->data_in_idx - sizeof(struct mctp_kcs_header) -
-+		   sizeof(struct mctp_kcs_trailer);
 +	if (mkcs->phase != KCS_PHASE_WRITE_DONE) {
 +		dev_err(mkcs->client.dev->dev,
 +			"%s: error! Wrong KCS stage at the end of data read (phase=%d)",
@@ -188,22 +195,19 @@ index 000000000000..2ea2ab00c188
 +		goto unlock_irq;
 +	}
 +
-+	mkcs->phase = KCS_PHASE_WAIT_READ;
-+	data_in_idx = mkcs->data_in_idx;
-+	mkcs->data_in_idx = 0;
++	rc = mctp_kcs_validate_data(mkcs, mkcs->data_in, mkcs->data_in_idx);
++	if (rc) {
++		dev_err(mkcs->client.dev->dev,
++			"%s: error! Binding validation failed", __func__);
++		goto unlock_irq;
++	}
++
++	data_len = mkcs->data_in_idx - sizeof(struct mctp_kcs_header) -
++		   sizeof(struct mctp_kcs_trailer);
 +
 +	skb = netdev_alloc_skb(mkcs->netdev, data_len);
 +	if (!skb) {
 +		mkcs->netdev->stats.rx_dropped++;
-+		goto unlock_irq;
-+	}
-+
-+	kcs_header = (struct mctp_kcs_header *)mkcs->data_in;
-+	rc = mctp_kcs_validate_data(mkcs, kcs_header, data_in_idx);
-+	if (rc) {
-+		dev_err(mkcs->client.dev->dev,
-+			"%s: error! Binding validation failed", __func__);
-+		dev_kfree_skb(skb);
 +		goto unlock_irq;
 +	}
 +
@@ -220,16 +224,18 @@ index 000000000000..2ea2ab00c188
 +	mkcs->netdev->stats.rx_bytes += data_len;
 +
 +unlock_irq:
++	mkcs->phase = KCS_PHASE_WAIT_READ;
++	mkcs->data_in_idx = 0;
 +	spin_unlock_irqrestore(&mkcs->lock, flags);
 +}
 +
 +static netdev_tx_t mctp_kcs_start_xmit(struct sk_buff *skb,
 +				       struct net_device *ndev)
 +{
++	struct mctp_kcs *mkcs = netdev_priv(ndev);
 +	struct mctp_kcs_header *kcs_header;
 +	unsigned long flags;
 +	int i;
-+	struct mctp_kcs *mkcs = netdev_priv(ndev);
 +
 +	if (skb->len > MCTP_KCS_MTU) {
 +		dev_err(&ndev->dev, "%s: error! skb len is bigger than MTU",
@@ -345,8 +351,8 @@ index 000000000000..2ea2ab00c188
 +
 +static void kcs_bmc_ipmi_handle_data(struct mctp_kcs *mkcs)
 +{
-+	u8 data;
 +	struct kcs_bmc_device *kcs_bmc = mkcs->client.dev;
++	u8 data;
 +
 +	switch (mkcs->phase) {
 +	case KCS_PHASE_WRITE_START:
@@ -534,8 +540,8 @@ index 000000000000..2ea2ab00c188
 +
 +static int kcs_bmc_mctp_add_device(struct kcs_bmc_device *kcs_bmc)
 +{
-+	struct mctp_kcs *mkcs;
 +	struct net_device *ndev;
++	struct mctp_kcs *mkcs;
 +	char name[32];
 +	int rc;
 +
