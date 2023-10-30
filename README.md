@@ -43,12 +43,6 @@ Couple of words about PCDs:
 - The `PcdMctpDestinationEndpointId` is mapped to the default `libmctp` EID (https://github.com/openbmc/libmctp/blob/2a2a0f6fd83318cfc37f44a657c9490c6a58a03a/utils/mctp-demux-daemon.c#L43),
 - The `PcdMctpKcsBaseAddress` should be chosen based on your hardware settings and synced with the BMC settings. In this case I use `0xca8`, later this value would be seen in the BMC configuration.
 
-
-Also the current code is not fully complaint with the [Management Component Transport Protocol (MCTP) KCS Transport Binding Specification](https://www.dmtf.org/sites/default/files/standards/documents/DSP0254_1.0.0.pdf).
-As a temprarily workaround we would be using the following forks:
-- [edk2-platforms](https://github.com/Kostr/edk2-platforms/tree/MCTP_OVER_KCS_UPDATE)
-- [edk2](https://github.com/Kostr/edk2/tree/MCTP_OVER_KCS_UPDATE)
-
 # BMC configuration
 
 The MCTP communication on the BMC side is based on the kernel net mctp driver ([info](https://codeconstruct.com.au/docs/mctp-on-linux-introduction/)).
@@ -57,11 +51,9 @@ Currently there is no support for the MCTP over KCS binding ([current bindings](
 
 ## Configuration
 
-For the kernel-based MCTP stack it is necessary to enable `mctp` disto feature.
-
-Add the following string to your machine configuration file:
+For the kernel-based MCTP stack it is necessary to add the following include to your machine configuration file:
 ```
-DISTRO_FEATURES += "mctp"
+require conf/distro/include/pldm.inc
 ```
 
 ## Patches
@@ -72,20 +64,21 @@ Since currently there is no MCTP-over-KCS binding driver we need to add some pat
 - [0002-ipmi-Create-header-with-KCS-interface-defines.patch](0002-ipmi-Create-header-with-KCS-interface-defines.patch)
 - [0003-mctp-Add-MCTP-over-KCS-transport-binding.patch](0003-mctp-Add-MCTP-over-KCS-transport-binding.patch)
 
-You also need to apply this patch to the [libpldm](https://github.com/openbmc/libpldm) library:
-- [`66591: transport: af-mctp: Add pldm_transport_af_mctp_bind()`](https://gerrit.openbmc.org/c/openbmc/libpldm/+/66591)
-
-And this patch to the [pldm](https://github.com/openbmc/pldm) package:
-- [`63652: pldm: Convert to using libpldm transport APIs`](https://gerrit.openbmc.org/c/openbmc/pldm/+/63652)
-
 Add all of these patches to your OpenBMC distibution via a standard recipe override mechanics.
 
 ## Kconfig
 
-Add the following kernel configuration options to the board Kconfig fragment:
+The `pldm.inc` file that we've included earlier would add the kernel configuration options from the `meta-phosphor/recipes-kernel/linux/mctp/mctp.cfg` file. So we need to add our driver to this Kconfig fragment:
 ```
-CONFIG_MCTP=y
-CONFIG_MCTP_TRANSPORT_KCS=y
+diff --git a/meta-phosphor/recipes-kernel/linux/mctp/mctp.cfg b/meta-phosphor/recipes-kernel/linux/mctp/mctp.cfg
+index 26f3c4157e..f73d55ffc9 100644
+--- a/meta-phosphor/recipes-kernel/linux/mctp/mctp.cfg
++++ b/meta-phosphor/recipes-kernel/linux/mctp/mctp.cfg
+@@ -1,3 +1,4 @@
+ CONFIG_MCTP=y
+ CONFIG_MCTP_SERIAL=y
+ CONFIG_MCTP_TRANSPORT_I2C=y
++CONFIG_MCTP_TRANSPORT_KCS=y
 ```
 
 ## DTS
